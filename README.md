@@ -17,7 +17,7 @@ Trabalho T3 da disciplina **Programação para Ciência de Dados** (UNIJUÍ).
 | Ocupações (CBO) | `CBO.dbf` | `TAB_SIA.zip` |
 | Diagnósticos (CID-10) | `S_CID.dbf` | `TAB_SIA.zip` |
 | Procedimentos (SIGTAP) | `TB_SIGTAW.dbf` | `TAB_SIA.zip` |
-| Municípios, regiões de saúde e microrregiões | `tb_municip`, `tb_regsaud`, `tb_micibge` | DATASUS → Base Territorial → `06-base_territorial_jun26.zip` |
+| Municípios, Regiões e Macrorregiões de Saúde | `tb_municip`, `tb_regsaud`, `rl_municip_regsaud`, `rl_municip_macsaud`, `tb_macsaud` | DATASUS → Base Territorial → `06-base_territorial_jun26.zip` |
 | Conversão DBC → DBF → CSV/SQL | TabWin 4.1.5 | DATASUS → Aplicativos → TABWIN |
 
 **Período analisado:** mês de **movimentação julho/2026** (arquivo `PARS2607`), estabelecimentos localizados em **Ijuí** (`pa_ufmun = '431020'`): **68.827 registros**.
@@ -33,7 +33,7 @@ O banco é preparado para receber mais meses: basta carregar outros arquivos `PA
 - Bibliotecas Python:
 
 ```bash
-pip install pandas numpy mysql-connector-python matplotlib seaborn
+pip install -r requirements.txt
 ```
 
 Versões testadas: pandas 3.1.1 · numpy 2.5.4 · matplotlib 3.11.2 · seaborn 0.13.2 · mysql-connector-python 26.7.0.
@@ -44,11 +44,13 @@ Versões testadas: pandas 3.1.1 · numpy 2.5.4 · matplotlib 3.11.2 · seaborn 0
 
 ```
 ├── README.md
-├── 01-cria-tabelas.sql                       # CREATE TABLE da pars e das tabelas auxiliares (DDL gerado pelo TabWin)
-├── 02-carga-pars.sql                         # LOAD DATA INFILE do PARS (CSV)
-├── 03-carga-auxiliares.sql                   # carga de cadgerrs, cbo, s_cid, procedimentos, tb_municip, tb_regsaud, tb_micibge
+├── requirements.txt                          # bibliotecas Python
+├── 01-cria-banco-pars.sql                    # banco dbsia + tabela pars (estrutura do PARS2607.dbf, 62 campos)
+├── 02-carga-pars.sql                         # LOAD DATA INFILE do PARS (CSV) + índice + conferência
+├── 03-carga-auxiliares.sql                   # cadgerrs, cbo, s_cid, procedimentos, tb_municip, tb_regsaud (INSERTs)
 ├── 04-gera-dimtempo-mysql.sql                # tabela de granularidade temporal DIMTEMPO (mês, bimestre, trimestre, semestre)
 ├── 05-corrige-s_cid.sql                      # correção de chaves repetidas na s_cid (ver "Validação da carga")
+├── 06-carga-regioes.sql                      # município -> Região de Saúde e Macrorregião de Saúde (com PRIMARY KEY)
 ├── view.sql                                  # VIEW pa_ijui: relacionamentos + filtro de Ijuí
 └── Etapa 4 - Analises Estrategicas - DBSIA.ipynb   # exploração, limpeza, análises, gráficos e conclusões
 ```
@@ -70,28 +72,15 @@ Os arquivos de dados (`.dbc`, `.dbf`, `.csv`) **não são versionados**: o CSV d
 Execute os scripts **na ordem**, pelo cliente de linha de comando do MySQL (como administrador). O `LOAD DATA` costuma falhar pelo Workbench por causa das permissões.
 
 ```sql
-CREATE DATABASE dbsia;
-USE dbsia;
-SOURCE 01-cria-tabelas.sql;
+SOURCE 01-cria-banco-pars.sql;
 SOURCE 02-carga-pars.sql;
 SOURCE 03-carga-auxiliares.sql;
 SOURCE 05-corrige-s_cid.sql;
 ```
 
-O CSV do PARS deve estar na pasta de upload do MySQL (`SHOW VARIABLES LIKE 'secure_file_priv';`). Exemplo de carga:
-
-```sql
-LOAD DATA INFILE 'C:/ProgramData/MySQL/MySQL Server 8.0/Uploads/PARS2607.csv'
-INTO TABLE pars CHARACTER SET latin1
-FIELDS TERMINATED BY ',' ENCLOSED BY '"'
-LINES TERMINATED BY '\r\n' IGNORE 1 ROWS;
-```
-
-**Recomendado:** índice no filtro da VIEW, que reduz bastante o tempo das consultas:
-
-```sql
-CREATE INDEX ix_pars_ufmun ON pars (pa_ufmun);
-```
+- **Antes do `02`:** copie o `PARS2607.csv` para a pasta de upload do MySQL (`SHOW VARIABLES LIKE 'secure_file_priv';`; no Windows, normalmente `C:/ProgramData/MySQL/MySQL Server 8.0/Uploads/`) e ajuste o caminho no script, se necessário. O `02` também cria o índice `ix_pars_ufmun`, que acelera o filtro da VIEW.
+- **`03`:** contém as tabelas auxiliares já convertidas em `INSERT`s (cerca de 16 MB), então não depende de arquivos externos.
+- **`04`, `06` e `view.sql`:** não precisam ser executados à mão, porque o notebook os executa automaticamente (passo 3). Se preferir, rode-os na ordem `04` → `06` → `view.sql`.
 
 ### 3. Executar o notebook
 
@@ -100,8 +89,9 @@ Abra `Etapa 4 - Analises Estrategicas - DBSIA.ipynb` **na mesma pasta dos script
 Ao carregar os dados, o notebook:
 
 1. cria a tabela `DIMTEMPO` (executando `04-gera-dimtempo-mysql.sql`) se ela ainda não existir;
-2. cria ou atualiza a VIEW `pa_ijui` (executando `view.sql`) se faltar alguma coluna;
-3. valida a carga, comparando os registros da VIEW com os da `pars` e procurando chaves repetidas nas tabelas auxiliares.
+2. carrega as tabelas de regiões de saúde (executando `06-carga-regioes.sql`) se elas ainda não existirem;
+3. cria ou atualiza a VIEW `pa_ijui` (executando `view.sql`) se faltar alguma coluna;
+4. valida a carga, comparando os registros da VIEW com os da `pars` e procurando chaves repetidas nas tabelas auxiliares.
 
 ---
 
@@ -116,9 +106,13 @@ A VIEW `pa_ijui` relaciona a produção (`pars`) com as tabelas descritivas e fi
 | `pars` → `cbo` (ocupação) | `pa_cbocod = cbo` |
 | `pars` → `s_cid` (diagnóstico) | `pa_cidpri = cd_cod` |
 | `pars` → `tb_municip` (município do estabelecimento e do paciente) | `pa_ufmun` / `pa_munpcn = co_municip` |
+| `pars` → `rl_municip_regsaud` → `tb_regsaud` (Região de Saúde do paciente) | `pa_munpcn = co_municip`, `co_regsaud` |
+| `pars` → `rl_municip_macsaud` → `tb_macsaud` (Macrorregião de Saúde do paciente) | `pa_munpcn = co_municip`, `co_macsaud` |
 | `pars` → `DIMTEMPO` (mês de movimentação) | `pa_mvm = anomes` |
 
-Além das descrições, a VIEW expõe os códigos usados nas análises: procedimento SIGTAP (`CodProcedimento`), tipo de unidade do CNES (`TipoUnidade`), instrumento de registro (`Instrumento`), número da APAC (`NumAutorizacao`) e competência do atendimento (`Competencia`).
+Além das descrições, a VIEW expõe os códigos usados nas análises: procedimento SIGTAP (`CodProcedimento`), tipo de unidade do CNES (`TipoUnidade`), instrumento de registro (`Instrumento`), número da APAC (`NumAutorizacao`), competência do atendimento (`Competencia`), além de código, coordenadas, UF, Região e Macrorregião de Saúde do município do paciente.
+
+**Microrregião IBGE:** o modelo do enunciado prevê MUNICIPIO → RL → MICRO. Na base territorial de jun/2026, porém, 497 dos 498 municípios do RS apontam em `rl_municip_micibge` para um código (`43900`) que não existe em `tb_micibge`: o IBGE substituiu as microrregiões pelas Regiões Geográficas Imediatas em 2017. Por isso o agrupamento regional usa a **Macrorregião de Saúde**, a divisão do planejamento do SUS. Também se evitou o `rl_regsaud_macsaud`, que tem uma região repetida e duplicaria registros no `JOIN`.
 
 ---
 
@@ -152,7 +146,7 @@ A validação comparou os registros da VIEW com os da tabela `pars` e encontrou 
 3. **Volume e perfil:** último mês, bimestre e trimestre (DIMTEMPO), distribuição por área SIGTAP, evolução temporal e competência × movimentação
 4. **Estabelecimentos:** ranking, tipo de unidade e aprovados × produzidos
 5. **Perfil demográfico e epidemiológico:** pirâmide etária, área × faixa etária, capítulos da CID-10 e doenças crônicas
-6. **Fluxos regionais:** municípios de origem e participação de não residentes por área
+6. **Fluxos regionais:** municípios de origem, Região e Macrorregião de Saúde dos pacientes, alcance regional de cada área e **mapa dos fluxos** (Matplotlib, com as coordenadas da `tb_municip`, sem shapefile)
 7. **Recursos financeiros:** valor aprovado × produzido, diferenças por estabelecimento e gasto médio por procedimento
 8. **Áreas críticas:** oncologia (quimioterapia × radioterapia, APACs), saúde mental (CAPS, psiquiatria, psicologia) e atenção básica (UBS cadastradas × produção no SIA)
 
@@ -161,7 +155,7 @@ A validação comparou os registros da VIEW com os da tabela `pars` e encontrou 
 - **68.827 registros**: 461.059 procedimentos produzidos e **364.679 aprovados** (79,1%). Em valor, R$ 6.272.060,94 produzidos e **R$ 6.158.024,69 aprovados** (98,2%): as glosas recaem sobre procedimentos de baixo custo.
 - A **17ª CRS** lidera em quantidade, toda em **dispensação de medicamentos**. O **Hospital de Clínicas** concentra mais da metade do valor aprovado.
 - **Oncologia** (toda no HCI): cerca de **R$ 2,0 milhões**, um terço do valor do município. Cerca de 80% dos pacientes vêm de outros municípios.
-- Cerca de **73% do valor aprovado** atende **moradores de outros municípios**: Ijuí funciona como polo regional.
+- Cerca de **64% do valor aprovado** atende **moradores de outros municípios**, e cerca de **34%** (R$ 2,1 milhões) vem de **outras Regiões de Saúde** (restante da Macro Missioneira e Macro Norte). Ijuí funciona como **referência macrorregional**, principalmente em oncologia.
 - **Hospital Bom Pastor:** 53% da quantidade aprovada, mas valor aprovado acima do produzido (ponto de atenção para o faturamento).
 - **Nenhuma UBS/ESF** de Ijuí tem produção no SIA: a atenção básica é registrada em outro sistema (SISAB / e-SUS APS).
 
